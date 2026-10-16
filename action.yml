@@ -1,0 +1,24 @@
+name: 'Autonomous Self-Healing QA Agent'
+description: 'Diagnoses Playwright test failures, auto-heals locators, creates Pull Requests, and dispatches Microsoft Teams Adaptive Cards.'
+author: 'jeswnath'
+
+inputs:
+  github-token:
+    description: 'GitHub Token for creating PR'
+    required: true
+  teams-webhook:
+    description: 'Microsoft Teams Webhook URL'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run Self-Healing Agent
+      shell: bash
+      env:
+        CI: 'true'
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        TEAMS_WEBHOOK_URL: ${{ inputs.teams-webhook }}
+        GITHUB_ACTIONS: 'true'
+      run: node ${{ github.action_path }}/scripts/heal-ci.mjs
