@@ -1,0 +1,70 @@
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.4",
+  "body": [
+    {
+      "type": "Container",
+      "style": "emphasis",
+      "items": [
+        {
+          "type": "TextBlock",
+          "text": "🩺 PLAYWRIGHT SELF-HEALING AI AGENT",
+          "weight": "Bolder",
+          "size": "Medium",
+          "color": "Accent"
+        },
+        {
+          "type": "TextBlock",
+          "text": "Automated Locator Drift Detected & Healed",
+          "isSubtle": true,
+          "spacing": "None"
+        }
+      ]
+    },
+    {
+      "type": "FactSet",
+      "facts": [
+        { "title": "Test Suite:", "value": "{{test_suite}}" },
+        { "title": "Failing Spec:", "value": "{{spec_file}}" },
+        { "title": "Error:", "value": "Timeout waiting for broken selector" },
+        { "title": "Confidence:", "value": "{{confidence_score}}% (High Confidence)" },
+        { "title": "Status:", "value": "✅ Re-run Passed (Self-Healed)" }
+      ]
+    },
+    {
+      "type": "Container",
+      "items": [
+        {
+          "type": "TextBlock",
+          "text": "🔍 Locator Healing Diff",
+          "weight": "Bolder"
+        },
+        {
+          "type": "TextBlock",
+          "text": "❌ Old: {{old_locator}}\n✅ New: {{healed_locator}}",
+          "fontType": "Monospace",
+          "wrap": true
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.Submit",
+      "title": "✅ Approve & Commit to Branch",
+      "data": { "action": "commit_heal", "spec": "{{spec_file}}" }
+    },
+    {
+      "type": "Action.Submit",
+      "title": "🔍 View Git Diff",
+      "data": { "action": "view_diff" }
+    },
+    {
+      "type": "Action.Submit",
+      "title": "❌ Rollback Change",
+      "data": { "action": "rollback" }
+    }
+  ]
+}
+
