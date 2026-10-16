@@ -22,3 +22,4 @@ runs:
         TEAMS_WEBHOOK_URL: ${{ inputs.teams-webhook }}
         GITHUB_ACTIONS: 'true'
       run: node ${{ github.action_path }}/scripts/heal-ci.mjs
+
