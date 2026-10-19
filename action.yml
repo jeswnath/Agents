@@ -9,6 +9,20 @@ inputs:
   teams-webhook:
     description: 'Microsoft Teams Webhook URL'
     required: false
+  azure-openai-key:
+    description: 'Azure OpenAI API Key'
+    required: false
+  azure-openai-endpoint:
+    description: 'Azure OpenAI Endpoint / Base URL'
+    required: false
+  azure-openai-deployment:
+    description: 'Azure OpenAI Deployment Name (e.g. gpt-4o)'
+    required: false
+    default: 'gpt-4o'
+  azure-openai-api-version:
+    description: 'Azure OpenAI API Version'
+    required: false
+    default: '2024-08-01-preview'
 
 runs:
   using: 'composite'
@@ -19,7 +33,11 @@ runs:
         CI: 'true'
         GITHUB_TOKEN: ${{ inputs.github-token }}
         GH_TOKEN: ${{ inputs.github-token }}
-        TEAMS_WEBHOOK_URL: ${{ inputs.teams-webhook }}
+        TEAMS_WEBHOOK_URL: ${{ inputs.teams-webhook || env.TEAMS_WEBHOOK_URL }}
+        AZURE_OPENAI_API_KEY: ${{ inputs.azure-openai-key || env.AZURE_OPENAI_API_KEY }}
+        AZURE_OPENAI_ENDPOINT: ${{ inputs.azure-openai-endpoint || env.AZURE_OPENAI_ENDPOINT }}
+        AZURE_OPENAI_DEPLOYMENT_NAME: ${{ inputs.azure-openai-deployment || env.AZURE_OPENAI_DEPLOYMENT_NAME }}
+        AZURE_OPENAI_API_VERSION: ${{ inputs.azure-openai-api-version || env.AZURE_OPENAI_API_VERSION }}
         GITHUB_ACTIONS: 'true'
       run: node ${{ github.action_path }}/scripts/heal-ci.mjs
 

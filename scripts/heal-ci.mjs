@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { execSync, execFileSync } from 'child_process';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const AGENT_DIR = path.resolve(__dirname, '..');
 
 const REPORT_DIR = path.resolve('healing-reports');
 const REPORT_FILE = path.join(REPORT_DIR, 'healing-report-latest.md');
@@ -9,6 +14,30 @@ const RESULTS_JSON = path.resolve('test-results/results.json');
 // Ensure reports directory exists
 if (!fs.existsSync(REPORT_DIR)) {
   fs.mkdirSync(REPORT_DIR, { recursive: true });
+}
+
+// Automatically load environment variables from .env if present
+const envLocations = [
+  path.resolve('.env'),
+  path.resolve('..', '.env'),
+  path.resolve(process.env.USERPROFILE || '', 'Desktop', '.env')
+];
+for (const envPath of envLocations) {
+  if (fs.existsSync(envPath)) {
+    try {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx !== -1) {
+          const k = trimmed.slice(0, eqIdx).trim();
+          const v = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+          if (!process.env[k]) process.env[k] = v;
+        }
+      }
+    } catch (_) {}
+  }
 }
 
 console.log('\n================================================================================');
@@ -87,91 +116,147 @@ if (rawErrorMessage) {
   console.log(`   • Error Signature: ${firstErrorLine.trim()}`);
 }
 
+// Function: Azure OpenAI LLM Healing Engine
+async function queryAzureOpenAI({ specContent, failedLineNumber, rawErrorMessage, targetSpecPath }) {
+  const apiKey = process.env.AZURE_OPENAI_API_KEY;
+  const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+  const deployment = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || 'gpt-4o';
+  const apiVersion = process.env.AZURE_OPENAI_API_VERSION || '2024-08-01-preview';
+
+  if (!apiKey || !endpoint) {
+    return null;
+  }
+
+  console.log('\n🤖 Azure OpenAI credentials detected!');
+  console.log(`   • Endpoint: ${endpoint}`);
+  console.log(`   • Deployment: ${deployment}`);
+  console.log(`   • API Version: ${apiVersion}`);
+  console.log('   • Querying LLM to diagnose failure & formulate resilient Playwright locator...');
+
+  let url = endpoint.trim().replace(/\/$/, '');
+  if (!url.includes('/openai/deployments')) {
+    url = `${url}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+  } else if (!url.includes('api-version=')) {
+    url = `${url}${url.includes('?') ? '&' : '?'}api-version=${apiVersion}`;
+  }
+
+  // Read instructions dynamically from agent and skill markdown files (Single Source of Truth)
+  const agentSpecPath = path.join(AGENT_DIR, '.github/agents/Self-Healing-QA.md');
+  const skillPath = path.join(AGENT_DIR, '.github/skills/self-healing-locator/SKILL.md');
+  const locatorPriorityPath = path.join(AGENT_DIR, '.github/skills/self-healing-locator/references/locator-priority.md');
+
+  const agentSpec = fs.existsSync(agentSpecPath) ? fs.readFileSync(agentSpecPath, 'utf-8') : '';
+  const skillSpec = fs.existsSync(skillPath) ? fs.readFileSync(skillPath, 'utf-8') : '';
+  const locatorPriority = fs.existsSync(locatorPriorityPath) ? fs.readFileSync(locatorPriorityPath, 'utf-8') : '';
+
+  const systemPrompt = `You are the Self-Healing QA Agent specialized in Playwright TypeScript/JavaScript test automation suites.
+Strictly follow the guidelines, heuristics, and locator priority established in your Agent Specification and Skill documentation below:
+
+=== AGENT INSTRUCTIONS (.github/agents/Self-Healing-QA.md) ===
+${agentSpec}
+
+=== SKILL PLAYBOOK (.github/skills/self-healing-locator/SKILL.md) ===
+${skillSpec}
+
+=== LOCATOR PRIORITY & ANTI-PATTERNS (references/locator-priority.md) ===
+${locatorPriority}
+
+=== REQUIRED OUTPUT FORMAT ===
+You MUST respond with pure JSON ONLY (no markdown blocks, no conversational preamble).
+{
+  "failedLineNumber": <line number integer>,
+  "oldCodeLine": "<exact verbatim code of the single line to replace>",
+  "newCodeLine": "<exact replacement line of code>",
+  "healingRationale": "<concise explanation of why it failed and why this locator is chosen>",
+  "confidenceScore": <integer between 0 and 100>
+}`;
+
+  const userPrompt = `Test File: ${path.relative(process.cwd(), targetSpecPath)}
+Failed Line Number: ${failedLineNumber || 'unknown'}
+Error Message:
+${rawErrorMessage}
+
+Spec File Contents:
+\`\`\`typescript
+${specContent}
+\`\`\`
+
+Identify the broken line, generate the healed code line following Playwright P1 accessibility hierarchy, and respond with pure JSON.`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': apiKey
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.1
+      })
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.warn(`⚠️ Azure OpenAI API returned HTTP ${res.status}: ${errText}`);
+      return null;
+    }
+
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      console.warn('⚠️ Azure OpenAI returned an empty response.');
+      return null;
+    }
+
+    const jsonStr = content.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    const parsed = JSON.parse(jsonStr);
+
+    if (parsed.oldCodeLine && parsed.newCodeLine) {
+      return {
+        oldCodeLine: parsed.oldCodeLine.trim(),
+        newCodeLine: parsed.newCodeLine.trim(),
+        healingRationale: parsed.healingRationale || 'Healed using Azure OpenAI LLM.',
+        confidenceScore: Number(parsed.confidenceScore) || 95,
+        failedLineNumber: parsed.failedLineNumber || failedLineNumber
+      };
+    }
+  } catch (err) {
+    console.warn(`⚠️ Azure OpenAI invocation error: ${err.message}`);
+  }
+
+  return null;
+}
+
 // 2. Intelligent Healing Engine
 let oldCodeLine = '';
 let newCodeLine = '';
 let healingRationale = '';
 let confidenceScore = 0;
 
-// Case A: Regex unescaped digits: /Order #d+/ vs /Order #\d+/
-if (specContent.includes('/Order #d+/') || rawErrorMessage.includes('/Order #d+/') || (failedLineNumber && lines[failedLineNumber - 1]?.includes('/Order #d+/'))) {
-  const lineIdx = lines.findIndex(l => l.includes('/Order #d+/'));
-  if (lineIdx !== -1) {
-    oldCodeLine = lines[lineIdx].trim();
-    newCodeLine = lines[lineIdx].replace('/Order #d+/', '/Order #\\d+/').trim();
-    lines[lineIdx] = lines[lineIdx].replace('/Order #d+/', '/Order #\\d+/');
-    healingRationale = "Syntax error in assertion regex: '/Order #d+/' was missing the escape backslash before 'd+'. Healed to '/Order #\\d+/' to correctly match the dynamic order number.";
-    confidenceScore = 98;
-  }
-}
-// Case B: Sign-in link locator drift (e.g. 'Logged In', 'a.old-signin-link', 'Login', etc.)
-else if (
-  (failedLineNumber && lines[failedLineNumber - 1] && (
-    lines[failedLineNumber - 1].includes('Logged In') ||
-    lines[failedLineNumber - 1].includes('a.old-signin-link') ||
-    lines[failedLineNumber - 1].includes('login') ||
-    lines[failedLineNumber - 1].includes('Sign In')
-  )) ||
-  specContent.includes('Logged In') ||
-  specContent.includes('a.old-signin-link') ||
-  rawErrorMessage.includes('Logged In') ||
-  rawErrorMessage.includes('a.old-signin-link')
-) {
-  const lineIdx = (failedLineNumber && failedLineNumber <= lines.length)
-    ? failedLineNumber - 1
-    : lines.findIndex(l => l.includes('Logged In') || l.includes('a.old-signin-link'));
+// Attempt dynamic healing via Azure OpenAI LLM
+const llmResult = await queryAzureOpenAI({ specContent, failedLineNumber, rawErrorMessage, targetSpecPath });
 
-  if (lineIdx !== -1) {
-    oldCodeLine = lines[lineIdx].trim();
-    const replacement = "await page.getByRole('link', { name: 'Sign In' }).click();";
-    newCodeLine = replacement;
-    lines[lineIdx] = lines[lineIdx].replace(/await page\.(getByRole|locator)\(.*?\)\.click\(.*?\);?/, replacement);
-    healingRationale = `Broken locator on line ${lineIdx + 1} timed out waiting for element. Upgraded to resilient Playwright P1 Accessible Locator: page.getByRole('link', { name: 'Sign In' }).`;
-    confidenceScore = 96;
-  }
-}
-// Case C: Checkout transition locator drift (e.g. 'Proceed to Checkout')
-else if (
-  (failedLineNumber && lines[failedLineNumber - 1] && (
-    lines[failedLineNumber - 1].includes('checkout') ||
-    lines[failedLineNumber - 1].includes('proceed')
-  )) ||
-  specContent.includes('btn-proceed-checkout-drifted') ||
-  rawErrorMessage.includes('btn-proceed-checkout-drifted')
-) {
-  const lineIdx = (failedLineNumber && failedLineNumber <= lines.length)
-    ? failedLineNumber - 1
-    : lines.findIndex(l => l.includes('btn-proceed-checkout-drifted'));
+if (llmResult && llmResult.oldCodeLine && llmResult.newCodeLine) {
+  oldCodeLine = llmResult.oldCodeLine;
+  newCodeLine = llmResult.newCodeLine;
+  healingRationale = `[Azure OpenAI] ${llmResult.healingRationale}`;
+  confidenceScore = llmResult.confidenceScore;
 
+  const lineIdx = lines.findIndex(l => l.trim() === oldCodeLine || l.includes(oldCodeLine));
   if (lineIdx !== -1) {
-    oldCodeLine = lines[lineIdx].trim();
-    const replacement = "await page.getByRole('link', { name: 'Proceed to Checkout' }).click();";
-    newCodeLine = replacement;
-    lines[lineIdx] = lines[lineIdx].replace(/await page\.(getByRole|locator)\(.*?\)\.click\(.*?\);?/, replacement);
-    healingRationale = `Broken locator on line ${lineIdx + 1} timed out during checkout transition. Upgraded to resilient Playwright P1 Accessible Locator: page.getByRole('link', { name: 'Proceed to Checkout' }).`;
-    confidenceScore = 97;
+    lines[lineIdx] = lines[lineIdx].replace(oldCodeLine, newCodeLine);
+  } else if (llmResult.failedLineNumber && llmResult.failedLineNumber <= lines.length) {
+    lines[llmResult.failedLineNumber - 1] = newCodeLine;
+  } else {
+    specContent = specContent.replace(oldCodeLine, newCodeLine);
+    lines.length = 0;
+    lines.push(...specContent.split('\n'));
   }
-}
-// Case D: Confirm order button locator drift
-else if (
-  (failedLineNumber && lines[failedLineNumber - 1] && (
-    lines[failedLineNumber - 1].includes('confirm')
-  )) ||
-  specContent.includes('confirm-order') ||
-  rawErrorMessage.includes('confirm-order')
-) {
-  const lineIdx = (failedLineNumber && failedLineNumber <= lines.length)
-    ? failedLineNumber - 1
-    : lines.findIndex(l => l.includes('confirm'));
-
-  if (lineIdx !== -1) {
-    oldCodeLine = lines[lineIdx].trim();
-    const replacement = "await page.getByRole('link', { name: 'Confirm' }).click();";
-    newCodeLine = replacement;
-    lines[lineIdx] = lines[lineIdx].replace(/await page\.(getByRole|locator)\(.*?\)\.click\(.*?\);?/, replacement);
-    healingRationale = `Broken locator on line ${lineIdx + 1} timed out during order confirmation. Upgraded to resilient Playwright P1 Accessible Locator: page.getByRole('link', { name: 'Confirm' }).`;
-    confidenceScore = 97;
-  }
+  console.log(`✨ Generated heal using Azure OpenAI LLM (${confidenceScore}% Confidence)!`);
 }
 
 if (!oldCodeLine || !newCodeLine) {
