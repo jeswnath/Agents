@@ -356,7 +356,8 @@ if not triage_result.get("isLocatorIssue", True):
     triage_md = f"""## 🚨 Autonomous QA Triage: Application / Test Data Defect Detected
 
 > **Status:** ⚠️ **Not a Locator Drift — Automated Patching Safely Prevented**  
-> **Category:** 🔒 **{category}**
+> **Category:** 🔒 **{category}**  
+> 🌐 **Live Report:** **[Click Here to Open Live Playwright HTML Report](https://jeswnath.github.io/testPlaywright/)**
 
 ### 🔍 Root Cause Analysis
 The test failed because the application returned an error during execution:
@@ -943,7 +944,8 @@ prevention_section = f"#### 💡 5. Best Practice / Prevention Advice\n> {preven
 step_summary_markdown = f"""## 🩺 Playwright Autonomous Self-Healing Report
 
 > **Status:** ❌ Test Failed in CI $\\rightarrow$ 🩹 **Autonomous Patch Prepared**  
-> **Source:** **{source_badge}** | **Confidence Score:** 🟢 **{confidence_score}% (High Confidence)**
+> **Source:** **{source_badge}** | **Confidence Score:** 🟢 **{confidence_score}% (High Confidence)**  
+> 🌐 **Live Report:** **[Click Here to Open Live Playwright HTML Report](https://jeswnath.github.io/testPlaywright/)**
 
 ### 📊 Failure vs. Proposed Heal Summary
 
