@@ -394,6 +394,9 @@ The test failed because the application returned an error during execution:
         repo_name = os.environ.get("GITHUB_REPOSITORY", "jeswnath/testPlaywright")
         run_number = os.environ.get("GITHUB_RUN_NUMBER", "Local")
         run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo_name}/actions"
+        user_or_org = repo_name.split("/")[0] if "/" in repo_name else "jeswnath"
+        repo_bare = repo_name.split("/")[1] if "/" in repo_name else "testPlaywright"
+        pages_url = f"https://{user_or_org}.github.io/{repo_bare}/"
 
         defect_payload = {
             "type": "message",
@@ -446,6 +449,11 @@ The test failed because the application returned an error during execution:
                             }
                         ],
                         "actions": [
+                            {
+                                "type": "Action.OpenUrl",
+                                "title": "🌐 View Live HTML Report",
+                                "url": pages_url
+                            },
                             {
                                 "type": "Action.OpenUrl",
                                 "title": "🔍 View CI Failure Logs",
@@ -746,6 +754,11 @@ def send_teams_notification(
                             "type": "Action.OpenUrl",
                             "title": "✅ Approve & Merge Fix (Open PR)",
                             "url": fallback_pr_url,
+                        },
+                        {
+                            "type": "Action.OpenUrl",
+                            "title": "🌐 View Live HTML Report",
+                            "url": f"https://{repo_name.split('/')[0] if '/' in repo_name else 'jeswnath'}.github.io/{repo_name.split('/')[1] if '/' in repo_name else 'testPlaywright'}/",
                         },
                         {
                             "type": "Action.OpenUrl",
