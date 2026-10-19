@@ -39,5 +39,5 @@ runs:
         AZURE_OPENAI_DEPLOYMENT_NAME: ${{ inputs.azure-openai-deployment || env.AZURE_OPENAI_DEPLOYMENT_NAME }}
         AZURE_OPENAI_API_VERSION: ${{ inputs.azure-openai-api-version || env.AZURE_OPENAI_API_VERSION }}
         GITHUB_ACTIONS: 'true'
-      run: node ${{ github.action_path }}/scripts/heal-ci.mjs
+      run: python3 ${{ github.action_path }}/scripts/heal-ci.py
 
