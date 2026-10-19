@@ -33,10 +33,26 @@ inputs:
     description: 'Generic Redis URL'
     required: false
 
+branding:
+  icon: 'cpu'
+  color: 'purple'
+
+outputs:
+  category:
+    description: 'Triage category (LOCATOR_DRIFT, AUTHENTICATION_OR_TEST_DATA, APPLICATION_BUG)'
+    value: ${{ steps.heal.outputs.category }}
+  healed:
+    description: 'Whether a self-healing patch and PR was created (true/false)'
+    value: ${{ steps.heal.outputs.healed }}
+  pr-url:
+    description: 'URL of the created Pull Request, if applicable'
+    value: ${{ steps.heal.outputs.pr-url }}
+
 runs:
   using: 'composite'
   steps:
-    - name: Run Self-Healing Agent
+    - name: Run Autonomous Self-Healing & Triage QA Agent
+      id: heal
       shell: bash
       env:
         CI: 'true'
