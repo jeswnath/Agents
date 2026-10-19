@@ -92,8 +92,8 @@ if (fs.existsSync(RESULTS_JSON)) {
 }
 
 // Fallback: If results.json was not found, check target demo spec directly
-let targetSpecPath = failedTestInfo && failedTestInfo.errorLocation && failedTestInfo.errorLocation.file
-  ? path.resolve(failedTestInfo.errorLocation.file)
+let targetSpecPath = (failedTestInfo && (failedTestInfo.errorLocation?.file || failedTestInfo.file))
+  ? path.resolve(failedTestInfo.errorLocation?.file || failedTestInfo.file)
   : path.resolve('tests/petstore-broken.spec.ts');
 
 if (!fs.existsSync(targetSpecPath)) {
@@ -246,11 +246,19 @@ if (llmResult && llmResult.oldCodeLine && llmResult.newCodeLine) {
   healingRationale = `[Azure OpenAI] ${llmResult.healingRationale}`;
   confidenceScore = llmResult.confidenceScore;
 
-  const lineIdx = lines.findIndex(l => l.trim() === oldCodeLine || l.includes(oldCodeLine));
+  const trimmedOld = oldCodeLine.trim();
+  const trimmedNew = newCodeLine.trim();
+  const lineIdx = lines.findIndex(l => l.trim() === trimmedOld || l.includes(trimmedOld));
   if (lineIdx !== -1) {
-    lines[lineIdx] = lines[lineIdx].replace(oldCodeLine, newCodeLine);
+    if (lines[lineIdx].includes(trimmedOld)) {
+      lines[lineIdx] = lines[lineIdx].replace(trimmedOld, trimmedNew);
+    } else {
+      const indent = (lines[lineIdx].match(/^\s*/) || [''])[0];
+      lines[lineIdx] = indent + trimmedNew;
+    }
   } else if (llmResult.failedLineNumber && llmResult.failedLineNumber <= lines.length) {
-    lines[llmResult.failedLineNumber - 1] = newCodeLine;
+    const indent = (lines[llmResult.failedLineNumber - 1].match(/^\s*/) || [''])[0];
+    lines[llmResult.failedLineNumber - 1] = indent + trimmedNew;
   } else {
     specContent = specContent.replace(oldCodeLine, newCodeLine);
     lines.length = 0;
