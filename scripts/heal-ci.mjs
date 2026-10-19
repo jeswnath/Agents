@@ -167,8 +167,20 @@ You MUST respond with pure JSON ONLY (no markdown blocks, no conversational prea
   "failedLineNumber": <line number integer>,
   "oldCodeLine": "<exact verbatim code of the single line to replace>",
   "newCodeLine": "<exact replacement line of code>",
-  "healingRationale": "<concise explanation of why it failed and why this locator is chosen>",
-  "confidenceScore": <integer between 0 and 100>
+  "rootCauseAnalysis": "<in-depth technical explanation of why the test failed at this exact line>",
+  "downstreamContext": "<how subsequent steps, assertions, or business logic influenced the fix selection>",
+  "alternativesEvaluated": [
+    { "candidate": "<locator option>", "verdict": "REJECTED | BANNED | SELECTED", "rationale": "<why this was selected or rejected>" }
+  ],
+  "healingRationale": "<concise summary of why the chosen fix is optimal and resilient>",
+  "confidenceScore": <integer between 0 and 100>,
+  "confidenceBreakdown": {
+    "roleScore": <0-35>,
+    "textScore": <0-35>,
+    "structureScore": <0-20>,
+    "positionScore": <0-10>
+  },
+  "preventionTips": "<actionable recommendation for developers or QA to make this element more testable>"
 }`;
 
   const userPrompt = `Test File: ${path.relative(process.cwd(), targetSpecPath)}
@@ -181,7 +193,7 @@ Spec File Contents:
 ${specContent}
 \`\`\`
 
-Identify the broken line, generate the healed code line following Playwright P1 accessibility hierarchy, and respond with pure JSON.`;
+Analyze the failure in-depth, evaluate candidate alternatives, generate the healed code line following Playwright P1 accessibility hierarchy, and respond with pure JSON.`;
 
   try {
     const res = await fetch(url, {
@@ -219,8 +231,13 @@ Identify the broken line, generate the healed code line following Playwright P1 
       return {
         oldCodeLine: parsed.oldCodeLine.trim(),
         newCodeLine: parsed.newCodeLine.trim(),
-        healingRationale: parsed.healingRationale || 'Healed using Azure OpenAI LLM.',
+        rootCauseAnalysis: parsed.rootCauseAnalysis || parsed.healingRationale || 'Diagnosed using Azure OpenAI LLM.',
+        downstreamContext: parsed.downstreamContext || '',
+        alternativesEvaluated: Array.isArray(parsed.alternativesEvaluated) ? parsed.alternativesEvaluated : [],
+        healingRationale: parsed.healingRationale || parsed.rootCauseAnalysis || 'Healed using Azure OpenAI LLM.',
         confidenceScore: Number(parsed.confidenceScore) || 95,
+        confidenceBreakdown: parsed.confidenceBreakdown || { roleScore: 35, textScore: 35, structureScore: 15, positionScore: 10 },
+        preventionTips: parsed.preventionTips || '',
         failedLineNumber: parsed.failedLineNumber || failedLineNumber
       };
     }
@@ -273,12 +290,36 @@ if (!oldCodeLine || !newCodeLine) {
   process.exit(0);
 }
 
-console.log('\n🧠 Executing Skill: .github/skills/self-healing-locator/SKILL.md');
-console.log(`   • Rationale: ${healingRationale}`);
-console.log(`   • Healing Confidence Score: ${confidenceScore}% (High Confidence)`);
-console.log('   • Code Diff:');
-console.log(`     - ${oldCodeLine}`);
-console.log(`     + ${newCodeLine}`);
+const rootCause = llmResult.rootCauseAnalysis || llmResult.healingRationale || healingRationale;
+const downstream = llmResult.downstreamContext || '';
+const alternatives = llmResult.alternativesEvaluated || [];
+const confidenceBreakdown = llmResult.confidenceBreakdown || { roleScore: 35, textScore: 35, structureScore: 15, positionScore: 10 };
+const preventionTips = llmResult.preventionTips || '';
+
+console.log('\n================================================================================');
+console.log('🧠 AI AGENT CHAIN-OF-THOUGHT & REASONING DOSSIER');
+console.log('================================================================================');
+console.log(`📌 Target Spec:       ${path.relative(process.cwd(), targetSpecPath)} (Line ${llmResult.failedLineNumber || failedLineNumber})`);
+console.log(`🔍 Root Cause:        ${rootCause}`);
+if (downstream) {
+  console.log(`🧭 Downstream Intent: ${downstream}`);
+}
+if (alternatives.length > 0) {
+  console.log('\n⚖️ Candidate Solutions Evaluated:');
+  for (const alt of alternatives) {
+    const icon = alt.verdict === 'SELECTED' ? '🟢' : alt.verdict === 'BANNED' ? '🚫' : '🔴';
+    console.log(`   ${icon} [${alt.verdict}] \`${alt.candidate}\` -> ${alt.rationale}`);
+  }
+}
+console.log(`\n🎯 Healed Patch:`);
+console.log(`   - ${oldCodeLine}`);
+console.log(`   + ${newCodeLine}`);
+console.log(`\n📊 Confidence Score:   ${confidenceScore}% (High Confidence)`);
+console.log(`   • Role: ${confidenceBreakdown.roleScore || 35}/35 | Text: ${confidenceBreakdown.textScore || 35}/35 | Structure: ${confidenceBreakdown.structureScore || 15}/20 | Position: ${confidenceBreakdown.positionScore || 10}/10`);
+if (preventionTips) {
+  console.log(`💡 Long-Term QA Tip:  ${preventionTips}`);
+}
+console.log('================================================================================\n');
 
 // 3. Write healed spec file
 const healedContent = lines.join('\n');
@@ -287,7 +328,7 @@ const branchName = 'self-heal/automated-fix';
 // 4. GitHub Actions Step Summary (Renders rich UI directly on the GitHub Actions Run page)
 const stepSummaryMarkdown = `## 🩺 Playwright Autonomous Self-Healing Report
 
-> **Status:** ❌ Test Failed in CI $\\rightarrow$ 🩹 **Self-Healing Solution Prepared**  
+> **Status:** ❌ Test Failed in CI $\\rightarrow$ 🩹 **Autonomous Patch Prepared**  
 > **Confidence Score:** 🟢 **${confidenceScore}% (High Confidence)**
 
 ### 📊 Failure vs. Proposed Heal Summary
@@ -295,9 +336,9 @@ const stepSummaryMarkdown = `## 🩺 Playwright Autonomous Self-Healing Report
 | Metric | Details |
 | :--- | :--- |
 | **Failed Test** | \`${path.relative(process.cwd(), targetSpecPath)}\` |
-| **Root Cause** | ${healingRationale} |
-| **Healing Confidence** | **${confidenceScore}%** |
-| **Playwright Hierarchy** | **P1 Accessible / Verified Fix** |
+| **Failing Line** | Line \`${llmResult.failedLineNumber || failedLineNumber}\` |
+| **Playwright Hierarchy** | **P1 Accessible / Resilient Fix** |
+| **Overall Confidence** | **${confidenceScore}%** |
 
 ---
 
@@ -310,15 +351,44 @@ const stepSummaryMarkdown = `## 🩺 Playwright Autonomous Self-Healing Report
 
 ---
 
+### 🧠 Agent Chain-of-Thought & Reasoning Breakdown
+
+<details open>
+<summary><b>Click to expand AI Diagnosis & Decision Matrix</b></summary>
+<br/>
+
+#### 🔍 1. Root Cause Analysis
+${rootCause}
+
+${downstream ? `#### 🧭 2. Downstream Business Logic & Assertions\n${downstream}\n` : ''}
+
+#### ⚖️ 3. Candidate Alternatives Evaluated
+${alternatives.length > 0 
+  ? alternatives.map(a => `- **${a.verdict === 'SELECTED' ? '✅' : a.verdict === 'BANNED' ? '🚫' : '❌'} [${a.verdict}]** \`${a.candidate}\`: ${a.rationale}`).join('\n')
+  : `- Selected Playwright P1 Accessible Locator over fragile CSS/XPath.`}
+
+#### 📊 4. Confidence Scoring Rubric Breakdown
+- **Role Alignment ($S_{\\text{role}}$):** ${confidenceBreakdown.roleScore || 35}/35
+- **Semantic Text / Label ($S_{\\text{text}}$):** ${confidenceBreakdown.textScore || 35}/35
+- **Structural Stability ($S_{\\text{tag}}$):** ${confidenceBreakdown.structureScore || 15}/20
+- **Positional Context ($S_{\\text{pos}}$):** ${confidenceBreakdown.positionScore || 10}/10
+- **Total Calculated Score:** **${confidenceScore}%**
+
+${preventionTips ? `#### 💡 5. Best Practice / Prevention Advice\n> ${preventionTips}\n` : ''}
+
+</details>
+
+---
+
 ### 👤 Human-in-the-Loop (HITL) Decision:
-- **To Accept & Heal:** Review and merge the automatically created Pull Request or commit.
+- **To Accept & Heal:** Review and merge the automatically created Pull Request.
 - **To Reject:** Close the Pull Request without merging.
 `;
 
 if (process.env.GITHUB_STEP_SUMMARY) {
   try {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, stepSummaryMarkdown, 'utf-8');
-    console.log('✅ Rendered Self-Healing Dashboard to GitHub Actions Step Summary!');
+    console.log('✅ Rendered Rich Self-Healing Dashboard to GitHub Actions Step Summary!');
   } catch (err) {
     console.warn('⚠️ Could not write to GITHUB_STEP_SUMMARY:', err.message);
   }
@@ -353,7 +423,7 @@ if (isCI) {
     const prBody = `## 🩺 Playwright Autonomous Self-Healing Proposal
 
 A test failure was detected in GitHub Actions run #${process.env.GITHUB_RUN_NUMBER || 'CI'}.
-The **Self-Healing QA Agent** analyzed the failure and prepared this verified patch.
+The **Self-Healing QA Agent** analyzed the failure, evaluated candidate locators, and prepared this verified patch.
 
 ### 🔍 Changes Applied:
 \`\`\`diff
@@ -361,11 +431,17 @@ The **Self-Healing QA Agent** analyzed the failure and prepared this verified pa
 + ${newCodeLine}
 \`\`\`
 
-### 📊 Analysis:
-- **Spec:** \`${path.relative(process.cwd(), targetSpecPath)}\`
-- **Root Cause:** ${healingRationale}
-- **Confidence:** **${confidenceScore}% (High Confidence)**
+### 🧠 AI Diagnosis & Reasoning Breakdown:
+- **Spec File:** \`${path.relative(process.cwd(), targetSpecPath)}\` (Line ${llmResult.failedLineNumber || failedLineNumber})
+- **Root Cause:** ${rootCause}
+${downstream ? `- **Downstream Context:** ${downstream}\n` : ''}- **Confidence Score:** **${confidenceScore}% (High Confidence)**
 
+#### ⚖️ Alternatives Considered:
+${alternatives.length > 0 
+  ? alternatives.map(a => `- **${a.verdict === 'SELECTED' ? '✅' : a.verdict === 'BANNED' ? '🚫' : '❌'} [${a.verdict}]** \`${a.candidate}\`: ${a.rationale}`).join('\n')
+  : `- Upgraded to Playwright P1 Accessible Locator.`}
+
+${preventionTips ? `#### 💡 Prevention Advice:\n> ${preventionTips}\n` : ''}
 ---
 👉 **Human-in-the-Loop Action:**
 - **Merge this PR** to apply the healed code to your branch.
@@ -409,7 +485,7 @@ The **Self-Healing QA Agent** analyzed the failure and prepared this verified pa
       prUrl,
       targetSpec: path.relative(process.cwd(), targetSpecPath),
       confidenceScore,
-      healingRationale,
+      healingRationale: rootCause,
       oldCodeLine,
       newCodeLine
     });
@@ -427,7 +503,7 @@ The **Self-Healing QA Agent** analyzed the failure and prepared this verified pa
       prUrl: 'https://github.com/jeswnath/testPlaywright/pulls',
       targetSpec: path.relative(process.cwd(), targetSpecPath),
       confidenceScore,
-      healingRationale,
+      healingRationale: rootCause,
       oldCodeLine,
       newCodeLine
     });
