@@ -23,6 +23,15 @@ inputs:
     description: 'Azure OpenAI API Version'
     required: false
     default: '2024-08-01-preview'
+  upstash-redis-rest-url:
+    description: 'Upstash Redis REST URL for Error Memory'
+    required: false
+  upstash-redis-rest-token:
+    description: 'Upstash Redis REST Token for Error Memory'
+    required: false
+  redis-url:
+    description: 'Generic Redis URL'
+    required: false
 
 runs:
   using: 'composite'
@@ -38,6 +47,9 @@ runs:
         AZURE_OPENAI_ENDPOINT: ${{ inputs.azure-openai-endpoint || env.AZURE_OPENAI_ENDPOINT }}
         AZURE_OPENAI_DEPLOYMENT_NAME: ${{ inputs.azure-openai-deployment || env.AZURE_OPENAI_DEPLOYMENT_NAME }}
         AZURE_OPENAI_API_VERSION: ${{ inputs.azure-openai-api-version || env.AZURE_OPENAI_API_VERSION }}
+        UPSTASH_REDIS_REST_URL: ${{ inputs.upstash-redis-rest-url || env.UPSTASH_REDIS_REST_URL }}
+        UPSTASH_REDIS_REST_TOKEN: ${{ inputs.upstash-redis-rest-token || env.UPSTASH_REDIS_REST_TOKEN }}
+        REDIS_URL: ${{ inputs.redis-url || env.REDIS_URL }}
         GITHUB_ACTIONS: 'true'
       run: python3 ${{ github.action_path }}/scripts/heal-ci.py
 

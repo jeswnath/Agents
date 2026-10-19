@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 import re
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure UTF-8 stdout/stderr for emojis and markdown across platforms (Windows & Linux)
@@ -31,6 +33,8 @@ env_locations = [
     Path(".env").resolve(),
     Path("..", ".env").resolve(),
     Path(os.environ.get("USERPROFILE", ""), "Desktop", ".env").resolve(),
+    Path(os.environ.get("USERPROFILE", ""), "Desktop", "agents", ".env").resolve(),
+    AGENT_DIR / ".env",
 ]
 for env_path in env_locations:
     if env_path.is_file():
@@ -52,6 +56,82 @@ for env_path in env_locations:
 print("\n================================================================================")
 print("🤖 GITHUB ACTIONS: DYNAMIC SELF-HEALING QA AGENT TRIGGERED")
 print("================================================================================")
+
+
+# ---------------------------------------------------------------------------
+# Redis Institutional Memory Helpers (Upstash REST API - Zero Dependencies)
+# ---------------------------------------------------------------------------
+def upstash_command(cmd_list):
+    """Executes a command against Upstash Redis REST API using standard urllib."""
+    url = os.environ.get("UPSTASH_REDIS_REST_URL")
+    token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
+    if not url or not token:
+        return None
+
+    api_url = url.strip().rstrip("/")
+    auth_header = f"Bearer {token.strip()}"
+    req_body = json.dumps(cmd_list).encode("utf-8")
+
+    req = urllib.request.Request(
+        api_url,
+        data=req_body,
+        headers={"Authorization": auth_header, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("result")
+    except Exception as err:
+        print(f"⚠️ Redis memory communication note: {err}")
+        return None
+
+
+def query_redis_memory(redis_key):
+    """Checks if a verified fix for the given error fingerprint exists in Redis."""
+    raw_val = upstash_command(["GET", redis_key])
+    if not raw_val:
+        return None
+    try:
+        data = json.loads(raw_val)
+        hit_count = int(data.get("hitCount", 0)) + 1
+        data["hitCount"] = hit_count
+        data["lastUsedAt"] = datetime.now(timezone.utc).isoformat()
+        # Refresh TTL (30 days = 2,592,000s) and updated hit count
+        upstash_command(["SET", redis_key, json.dumps(data), "EX", 2592000])
+        return data
+    except Exception as err:
+        print(f"⚠️ Error reading cached fix from Redis: {err}")
+        return None
+
+
+def save_to_redis_memory(redis_key, fix_data, fingerprint, rel_spec):
+    """Saves a verified fix to Redis institutional memory with 30-day TTL."""
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        record = {
+            "fingerprint": fingerprint,
+            "targetSpec": str(rel_spec),
+            "failedLineNumber": fix_data.get("failedLineNumber"),
+            "oldCodeLine": fix_data.get("oldCodeLine"),
+            "newCodeLine": fix_data.get("newCodeLine"),
+            "rootCauseAnalysis": fix_data.get("rootCauseAnalysis"),
+            "downstreamContext": fix_data.get("downstreamContext", ""),
+            "alternativesEvaluated": fix_data.get("alternativesEvaluated", []),
+            "healingRationale": fix_data.get("healingRationale"),
+            "confidenceScore": fix_data.get("confidenceScore", 95),
+            "confidenceBreakdown": fix_data.get("confidenceBreakdown", {}),
+            "preventionTips": fix_data.get("preventionTips", ""),
+            "source": "azure-openai",
+            "hitCount": 1,
+            "learnedAt": now_iso,
+            "lastUsedAt": now_iso,
+        }
+        upstash_command(["SET", redis_key, json.dumps(record), "EX", 2592000])
+        print(f"💾 Saved newly formulated fix to Redis Memory (Key: {redis_key})")
+    except Exception as err:
+        print(f"⚠️ Could not save fix to Redis memory: {err}")
+
 
 # 1. Ingest Failure dynamically from Playwright test-results/results.json
 failed_test_info = None
@@ -142,22 +222,35 @@ if failed_test_info:
     elif isinstance(err_obj, str):
         raw_error_message = err_obj
 
-print("🔍 Ingested Failure Details:")
 try:
     rel_spec = target_spec_path.relative_to(Path.cwd())
 except ValueError:
     rel_spec = target_spec_path
+
+print("🔍 Ingested Failure Details:")
 print(f"   • Target Spec: {rel_spec}")
 if failed_line_number:
     print(f"   • Failed Line Number: {failed_line_number}")
+
+first_error_line = "Test assertion/locator failed"
 if raw_error_message:
     clean_error = re.sub(r"\x1b\[\d+m", "", raw_error_message)
-    first_error_line = "Test assertion/locator failed"
     for l in clean_error.split("\n"):
         if "Error:" in l or "waiting for" in l or "failed" in l:
             first_error_line = l
             break
     print(f"   • Error Signature: {first_error_line.strip()}")
+
+# ---------------------------------------------------------------------------
+# Error Fingerprint Formulation
+# ---------------------------------------------------------------------------
+failing_code_snippet = ""
+if failed_line_number and 1 <= failed_line_number <= len(lines):
+    failing_code_snippet = lines[failed_line_number - 1].strip()
+
+fp_seed = f"{rel_spec}::{failing_code_snippet}::{first_error_line.strip()}"
+error_fingerprint = hashlib.sha256(fp_seed.encode("utf-8")).hexdigest()[:16]
+redis_key = f"playwright:heal:{error_fingerprint}"
 
 
 # Function: Azure OpenAI LLM Healing Engine
@@ -320,7 +413,16 @@ Analyze the failure in-depth, evaluate candidate alternatives, generate the heal
 
 
 # Helper: Post Adaptive Card to Microsoft Teams
-def send_teams_notification(pr_url, target_spec, confidence_score, healing_rationale, old_code_line, new_code_line):
+def send_teams_notification(
+    pr_url,
+    target_spec,
+    confidence_score,
+    healing_rationale,
+    old_code_line,
+    new_code_line,
+    source_badge,
+    redis_key,
+):
     webhook_url = os.environ.get("TEAMS_WEBHOOK_URL")
     if not webhook_url:
         print("\n💡 Microsoft Teams Notification:")
@@ -378,7 +480,9 @@ def send_teams_notification(pr_url, target_spec, confidence_score, healing_ratio
                                 {"title": "Repository:", "value": repo_name},
                                 {"title": "Spec File:", "value": str(target_spec)},
                                 {"title": "Workflow Run:", "value": f"#{run_number}"},
-                                {"title": "Confidence:", "value": f"{confidence_score}% (High Confidence)"},
+                                {"title": "Diagnosis Source:", "value": source_badge},
+                                {"title": "Memory Key:", "value": redis_key},
+                                {"title": "Confidence:", "value": f"{confidence_score}%"},
                                 {"title": "Status:", "value": "🟡 Action Required: Pending Approval"},
                             ],
                         },
@@ -437,19 +541,49 @@ def send_teams_notification(pr_url, target_spec, confidence_score, healing_ratio
         print(f"⚠️ Could not post to Teams webhook: {err}")
 
 
-# 2. Intelligent Healing Engine
+# ---------------------------------------------------------------------------
+# 2. Intelligent Healing Engine (Redis Memory First -> LLM Fallback)
+# ---------------------------------------------------------------------------
 old_code_line = ""
 new_code_line = ""
 healing_rationale = ""
 confidence_score = 0
+is_memory_hit = False
+hit_count = 1
 
-llm_result = query_azure_openai(spec_content, failed_line_number, raw_error_message, target_spec_path)
+# Check Redis Memory first
+print(f"\n🧠 Querying Redis Institutional Memory for known error signature...")
+print(f"   • Memory Key: {redis_key}")
+
+cached_heal = query_redis_memory(redis_key)
+
+if cached_heal and cached_heal.get("oldCodeLine") and cached_heal.get("newCodeLine"):
+    is_memory_hit = True
+    llm_result = cached_heal
+    hit_count = cached_heal.get("hitCount", 1)
+    source_badge = f"⚡ Redis Memory (Hit #{hit_count})"
+    confidence_score = max(int(cached_heal.get("confidenceScore", 95)), 98)
+    healing_rationale = f"[Redis Memory] {cached_heal.get('healingRationale') or cached_heal.get('rootCauseAnalysis')}"
+    print(f"\n⚡ ==============================================================================")
+    print(f"⚡ REDIS INSTITUTIONAL MEMORY HIT! (Zero LLM Token Cost)")
+    print(f"⚡ ==============================================================================")
+    print(f"   • Memory Key:   {redis_key}")
+    print(f"   • Reused Times: {hit_count}")
+    print(f"   • Time Saved:   ~8s (Instant Recall from Institutional Memory)")
+else:
+    source_badge = "🤖 Azure OpenAI LLM"
+    print("   • Redis Memory Miss: No prior fix on record for this error signature.")
+    print("   • Engaging Azure OpenAI LLM for full reasoning & locator synthesis...")
+    llm_result = query_azure_openai(spec_content, failed_line_number, raw_error_message, target_spec_path)
+    if llm_result:
+        healing_rationale = f"[Azure OpenAI] {llm_result['healingRationale']}"
+        confidence_score = llm_result["confidenceScore"]
+        # Persist newly discovered fix to Redis Memory
+        save_to_redis_memory(redis_key, llm_result, error_fingerprint, rel_spec)
 
 if llm_result and llm_result.get("oldCodeLine") and llm_result.get("newCodeLine"):
     old_code_line = llm_result["oldCodeLine"]
     new_code_line = llm_result["newCodeLine"]
-    healing_rationale = f"[Azure OpenAI] {llm_result['healingRationale']}"
-    confidence_score = llm_result["confidenceScore"]
 
     trimmed_old = old_code_line.strip()
     trimmed_new = new_code_line.strip()
@@ -475,8 +609,6 @@ if llm_result and llm_result.get("oldCodeLine") and llm_result.get("newCodeLine"
     else:
         spec_content = spec_content.replace(old_code_line, new_code_line)
         lines = spec_content.split("\n")
-
-    print(f"✨ Generated heal using Azure OpenAI LLM ({confidence_score}% Confidence)!")
 
 if not old_code_line or not new_code_line:
     print("⚠️ Healing engine could not automatically formulate a high-confidence patch.")
@@ -510,9 +642,14 @@ except ValueError:
 failed_line_display = (llm_result.get("failedLineNumber") if llm_result else None) or failed_line_number
 
 print("\n================================================================================")
-print("🧠 AI AGENT CHAIN-OF-THOUGHT & REASONING DOSSIER")
+if is_memory_hit:
+    print("⚡ AI AGENT INSTITUTIONAL MEMORY DOSSIER")
+else:
+    print("🧠 AI AGENT CHAIN-OF-THOUGHT & REASONING DOSSIER")
 print("================================================================================")
 print(f"📌 Target Spec:       {rel_spec_str} (Line {failed_line_display})")
+print(f"🔑 Memory Key:        {redis_key}")
+print(f"🏷️  Source:            {source_badge}")
 print(f"🔍 Root Cause:        {root_cause}")
 if downstream:
     print(f"🧭 Downstream Intent: {downstream}")
@@ -562,7 +699,7 @@ prevention_section = f"#### 💡 5. Best Practice / Prevention Advice\n> {preven
 step_summary_markdown = f"""## 🩺 Playwright Autonomous Self-Healing Report
 
 > **Status:** ❌ Test Failed in CI $\\rightarrow$ 🩹 **Autonomous Patch Prepared**  
-> **Confidence Score:** 🟢 **{confidence_score}% (High Confidence)**
+> **Source:** **{source_badge}** | **Confidence Score:** 🟢 **{confidence_score}% (High Confidence)**
 
 ### 📊 Failure vs. Proposed Heal Summary
 
@@ -570,6 +707,8 @@ step_summary_markdown = f"""## 🩺 Playwright Autonomous Self-Healing Report
 | :--- | :--- |
 | **Failed Test** | `{rel_spec_str}` |
 | **Failing Line** | Line `{failed_line_display}` |
+| **Diagnosis Source** | **{source_badge}** |
+| **Memory Key** | `{redis_key}` |
 | **Playwright Hierarchy** | **P1 Accessible / Resilient Fix** |
 | **Overall Confidence** | **{confidence_score}%** |
 
@@ -661,6 +800,9 @@ if is_ci:
 A test failure was detected in GitHub Actions run #{os.environ.get('GITHUB_RUN_NUMBER', 'CI')}.
 The **Self-Healing QA Agent** analyzed the failure, evaluated candidate locators, and prepared this verified patch.
 
+- **Diagnosis Source:** {source_badge}
+- **Memory Key:** `{redis_key}`
+
 ### 🔍 Changes Applied:
 ```diff
 - {old_code_line}
@@ -736,6 +878,8 @@ The **Self-Healing QA Agent** analyzed the failure, evaluated candidate locators
             healing_rationale=root_cause,
             old_code_line=old_code_line,
             new_code_line=new_code_line,
+            source_badge=source_badge,
+            redis_key=redis_key,
         )
 
     except Exception as git_err:
@@ -753,6 +897,8 @@ else:
             healing_rationale=root_cause,
             old_code_line=old_code_line,
             new_code_line=new_code_line,
+            source_badge=source_badge,
+            redis_key=redis_key,
         )
 
 print("\n================================================================================")
