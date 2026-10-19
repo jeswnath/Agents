@@ -54,7 +54,7 @@ for env_path in env_locations:
             pass
 
 print("\n================================================================================")
-print("🤖 GITHUB ACTIONS: DYNAMIC SELF-HEALING QA AGENT TRIGGERED")
+print("🤖 GITHUB ACTIONS: DYNAMIC SELF-HEALING & TRIAGE QA AGENT TRIGGERED")
 print("================================================================================")
 
 
@@ -133,7 +133,9 @@ def save_to_redis_memory(redis_key, fix_data, fingerprint, rel_spec):
         print(f"⚠️ Could not save fix to Redis memory: {err}")
 
 
-# 1. Ingest Failure dynamically from Playwright test-results/results.json
+# ---------------------------------------------------------------------------
+# 1. Ingest Failure dynamically from Playwright test-results
+# ---------------------------------------------------------------------------
 failed_test_info = None
 
 if RESULTS_JSON.is_file():
@@ -173,7 +175,8 @@ if RESULTS_JSON.is_file():
                                     "file": spec.get("file"),
                                     "title": spec.get("title"),
                                     "error": detailed_error or result.get("error"),
-                                    "errorLocation": error_loc
+                                    "errorLocation": error_loc,
+                                    "attachments": result.get("attachments", [])
                                 })
             return failures
 
@@ -242,7 +245,237 @@ if raw_error_message:
     print(f"   • Error Signature: {first_error_line.strip()}")
 
 # ---------------------------------------------------------------------------
-# Error Fingerprint Formulation
+# Ingest Playwright Error Context & Page Snapshot (Accessibility Tree)
+# ---------------------------------------------------------------------------
+error_context_content = ""
+# 1. Check attachments in results.json
+if failed_test_info and failed_test_info.get("attachments"):
+    for att in failed_test_info["attachments"]:
+        if att.get("name") == "error-context" or (att.get("path") and att["path"].endswith("error-context.md")):
+            att_path = Path(att["path"])
+            if att_path.is_file():
+                try:
+                    error_context_content = att_path.read_text(encoding="utf-8")
+                    break
+                except Exception:
+                    pass
+
+# 2. Fallback: Search test-results for error-context.md
+if not error_context_content:
+    found_ctx = list(Path("test-results").glob("**/error-context.md"))
+    if found_ctx:
+        try:
+            error_context_content = found_ctx[0].read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# PHASE 1: Triage Classification (Is this really a locator issue?)
+# ---------------------------------------------------------------------------
+def perform_triage_classification(spec_content, error_context, raw_error, failed_line):
+    api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+
+    if not api_key or not endpoint or not error_context:
+        # Default to locator issue if no API or no error context available
+        return {"isLocatorIssue": True, "category": "LOCATOR_DRIFT"}
+
+    url = endpoint.strip().rstrip("/")
+    if "/openai/deployments" not in url:
+        url = f"{url}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+    elif "api-version=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}api-version={api_version}"
+
+    triage_prompt = """You are an expert QA Automation Triage Engineer.
+CRITICAL RULE: Before assuming a locator is broken, carefully examine the '# Page snapshot' YAML in the error context.
+- If the page snapshot shows an authentication failure (e.g. 'Invalid username or password', 'Signon failed', 'Unauthorized', 'Access Denied', 401), or an application error (500, 404, crash, blank page):
+  THEN this is NOT a locator issue! The downstream element (like 'Sign Out', 'Checkout', or 'Profile') was absent because the user was rejected or the app crashed.
+- Only classify as 'LOCATOR_DRIFT' if the page is in the expected valid state, but the locator could not match the element due to UI/DOM changes.
+
+Respond with pure JSON ONLY (no markdown blocks):
+{
+  "isLocatorIssue": true or false,
+  "category": "AUTHENTICATION_OR_TEST_DATA | APPLICATION_BUG | LOCATOR_DRIFT",
+  "rootCause": "<concise explanation of why the test actually failed>",
+  "pageErrorText": "<exact error text found in page snapshot if any>",
+  "actionableAdvice": "<guidance for QA or developer to fix test data or backend>"
+}"""
+
+    req_data = json.dumps({
+        "messages": [
+            {"role": "system", "content": triage_prompt},
+            {"role": "user", "content": f"SPEC CONTENT:\n{spec_content}\n\nPLAYWRIGHT ERROR CONTEXT & SNAPSHOT:\n{error_context}"}
+        ],
+        "temperature": 0.1
+    }).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=req_data,
+            headers={"Content-Type": "application/json", "api-key": api_key},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            json_str = re.sub(r"^```json\s*", "", content, flags=re.IGNORECASE)
+            json_str = re.sub(r"```\s*$", "", json_str).strip()
+            return json.loads(json_str)
+    except Exception as err:
+        print(f"ℹ️ Triage classifier note: {err}")
+        return {"isLocatorIssue": True, "category": "LOCATOR_DRIFT"}
+
+
+# Execute Triage
+triage_result = perform_triage_classification(spec_content, error_context_content, raw_error_message, failed_line_number)
+
+if not triage_result.get("isLocatorIssue", True):
+    category = triage_result.get("category", "APPLICATION_OR_DATA_DEFECT")
+    root_cause_diag = triage_result.get("rootCause", "Application or test data error detected.")
+    page_error_txt = triage_result.get("pageErrorText", "Error banner on page.")
+    actionable_adv = triage_result.get("actionableAdvice", "Review test credentials and application state.")
+
+    print("\n================================================================================")
+    print("🚨 AI AGENT TRIAGE: APPLICATION / TEST DATA DEFECT DETECTED")
+    print("================================================================================")
+    print("⚠️  VERDICT: NOT A LOCATOR ISSUE — AUTOMATED LOCATOR HEALING ABORTED")
+    print(f"📌 Target Spec:       {rel_spec} (Line {failed_line_number})")
+    print(f"🏷️  Category:          {category}")
+    if page_error_txt:
+        print(f"💥 Page Error Text:   \"{page_error_txt}\"")
+    print(f"🔍 Root Cause:        {root_cause_diag}")
+    print(f"💡 Actionable Advice: {actionable_adv}")
+    print("================================================================================\n")
+
+    # Render Step Summary
+    triage_md = f"""## 🚨 Autonomous QA Triage: Application / Test Data Defect Detected
+
+> **Status:** ⚠️ **Not a Locator Drift — Automated Patching Safely Prevented**  
+> **Category:** 🔒 **{category}**
+
+### 🔍 Root Cause Analysis
+The test failed because the application returned an error during execution:
+> **Page Error Message:** `{page_error_txt}`
+
+{root_cause_diag}
+
+---
+
+### 💡 Recommended Action for QA & Developers
+- {actionable_adv}
+- **Notice:** Automated locator patching was safely skipped to prevent modifying valid test code.
+"""
+
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_file:
+        try:
+            with open(summary_file, "a", encoding="utf-8") as f:
+                f.write(triage_md)
+            print("✅ Rendered Defect Report to GitHub Actions Step Summary!")
+        except Exception:
+            pass
+
+    try:
+        with open(REPORT_FILE, "w", encoding="utf-8") as f:
+            f.write(triage_md)
+        print(f"✅ Saved Local Defect Report to {REPORT_FILE}")
+    except Exception:
+        pass
+
+    # Send Teams Notification for Defect
+    webhook_url = os.environ.get("TEAMS_WEBHOOK_URL")
+    if webhook_url:
+        print("\n📢 SENDING DEFECT ALERT TO MICROSOFT TEAMS...")
+        repo_name = os.environ.get("GITHUB_REPOSITORY", "jeswnath/testPlaywright")
+        run_number = os.environ.get("GITHUB_RUN_NUMBER", "Local")
+        run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo_name}/actions"
+
+        defect_payload = {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.4",
+                        "body": [
+                            {
+                                "type": "Container",
+                                "style": "warning",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "🚨 TEST DATA / APPLICATION DEFECT DETECTED",
+                                        "weight": "Bolder",
+                                        "size": "Medium",
+                                        "color": "Attention"
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "Automated Locator Patching Prevented (Not a Selector Drift)",
+                                        "isSubtle": True,
+                                        "spacing": "None"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "FactSet",
+                                "facts": [
+                                    {"title": "Repository:", "value": repo_name},
+                                    {"title": "Spec File:", "value": str(rel_spec)},
+                                    {"title": "Workflow Run:", "value": f"#{run_number}"},
+                                    {"title": "Defect Category:", "value": category},
+                                    {"title": "Page Error:", "value": page_error_txt or "Signon / Data Failed"}
+                                ]
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": f"**Root Cause:** {root_cause_diag}",
+                                "wrap": True
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": f"**Action Required:** {actionable_adv}",
+                                "wrap": True
+                            }
+                        ],
+                        "actions": [
+                            {
+                                "type": "Action.OpenUrl",
+                                "title": "🔍 View CI Failure Logs",
+                                "url": run_url
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        try:
+            req = urllib.request.Request(
+                webhook_url,
+                data=json.dumps(defect_payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                print("✅ Successfully dispatched Defect Alert to Microsoft Teams!")
+        except Exception as e:
+            print(f"⚠️ Teams alert note: {e}")
+
+    print("\n================================================================================")
+    print("✅ SELF-HEALING TRIAGE PIPELINE COMPLETED (DEFECT ISOLATED)")
+    print("================================================================================\n")
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# PHASE 2: True Locator Drift Healing (Redis Memory First -> LLM Fallback)
 # ---------------------------------------------------------------------------
 failing_code_snippet = ""
 if failed_line_number and 1 <= failed_line_number <= len(lines):
@@ -541,9 +774,7 @@ def send_teams_notification(
         print(f"⚠️ Could not post to Teams webhook: {err}")
 
 
-# ---------------------------------------------------------------------------
-# 2. Intelligent Healing Engine (Redis Memory First -> LLM Fallback)
-# ---------------------------------------------------------------------------
+# Healing Engine Loop
 old_code_line = ""
 new_code_line = ""
 healing_rationale = ""
@@ -903,4 +1134,4 @@ else:
 
 print("\n================================================================================")
 print("✅ SELF-HEALING TRIAGE PIPELINE COMPLETED")
-print("================================================================================\n")
+print("================================================================================")
