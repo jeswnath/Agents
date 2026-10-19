@@ -450,60 +450,113 @@ The test failed because the application returned an error during execution:
                         "version": "1.4",
                         "body": [
                             {
-                                "type": "Container",
-                                "style": "warning",
-                                "items": [
+                                "type": "ColumnSet",
+                                "columns": [
                                     {
-                                        "type": "TextBlock",
-                                        "text": "🚨 TEST DATA / APPLICATION DEFECT DETECTED",
-                                        "weight": "Bolder",
-                                        "size": "Medium",
-                                        "color": "Attention"
+                                        "type": "Column",
+                                        "width": "stretch",
+                                        "items": [
+                                            {
+                                                "type": "TextBlock",
+                                                "text": "🚨 QA DEFECT ISOLATED",
+                                                "weight": "Bolder",
+                                                "size": "Medium",
+                                                "color": "Attention",
+                                            },
+                                            {
+                                                "type": "TextBlock",
+                                                "text": f"{repo_name} • Run #{run_number}",
+                                                "size": "Small",
+                                                "isSubtle": True,
+                                                "spacing": "None",
+                                            },
+                                        ],
                                     },
                                     {
-                                        "type": "TextBlock",
-                                        "text": "Automated Locator Patching Prevented (Not a Selector Drift)",
-                                        "isSubtle": True,
-                                        "spacing": "None"
-                                    }
-                                ]
+                                        "type": "Column",
+                                        "width": "auto",
+                                        "verticalContentAlignment": "Center",
+                                        "items": [
+                                            {
+                                                "type": "Container",
+                                                "style": "warning",
+                                                "items": [
+                                                    {
+                                                        "type": "TextBlock",
+                                                        "text": "⚠️ Bug Detected",
+                                                        "weight": "Bolder",
+                                                        "size": "Small",
+                                                        "color": "Warning",
+                                                    }
+                                                ],
+                                            }
+                                        ],
+                                    },
+                                ],
                             },
                             {
                                 "type": "FactSet",
+                                "spacing": "Small",
                                 "facts": [
-                                    {"title": "Repository:", "value": repo_name},
-                                    {"title": "Spec File:", "value": str(rel_spec)},
-                                    {"title": "Workflow Run:", "value": f"#{run_number}"},
-                                    {"title": "Defect Category:", "value": category},
-                                    {"title": "Page Error:", "value": page_error_txt or "Signon / Data Failed"}
-                                ]
+                                    {"title": "Spec:", "value": str(rel_spec)},
+                                    {"title": "Category:", "value": category},
+                                    {"title": "Page Error:", "value": page_error_txt or "Application / Auth Error"},
+                                ],
                             },
                             {
-                                "type": "TextBlock",
-                                "text": f"**Root Cause:** {root_cause_diag}",
-                                "wrap": True
+                                "type": "Container",
+                                "style": "emphasis",
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": "💡 Actionable Advice",
+                                        "size": "Small",
+                                        "weight": "Bolder",
+                                        "isSubtle": True,
+                                    },
+                                    {
+                                        "type": "TextBlock",
+                                        "text": actionable_adv,
+                                        "wrap": True,
+                                        "size": "Small",
+                                        "spacing": "Small",
+                                    },
+                                ],
                             },
                             {
-                                "type": "TextBlock",
-                                "text": f"**Action Required:** {actionable_adv}",
-                                "wrap": True
-                            }
+                                "type": "Container",
+                                "id": "defectDetailsSection",
+                                "isVisible": False,
+                                "items": [
+                                    {
+                                        "type": "TextBlock",
+                                        "text": f"**Root Cause Analysis:** {root_cause_diag}",
+                                        "wrap": True,
+                                        "size": "Small",
+                                    }
+                                ],
+                            },
                         ],
                         "actions": [
                             {
-                                "type": "Action.OpenUrl",
-                                "title": "🌐 View Live HTML Report",
-                                "url": pages_url
+                                "type": "Action.ToggleVisibility",
+                                "title": "🔍 Root Cause",
+                                "targetElements": ["defectDetailsSection"],
                             },
                             {
                                 "type": "Action.OpenUrl",
-                                "title": "🔍 View CI Failure Logs",
-                                "url": run_url
-                            }
-                        ]
-                    }
+                                "title": "🌐 Live Report",
+                                "url": pages_url,
+                            },
+                            {
+                                "type": "Action.OpenUrl",
+                                "title": "📋 CI Logs",
+                                "url": run_url,
+                            },
+                        ],
+                    },
                 }
-            ]
+            ],
         }
         try:
             req = urllib.request.Request(
@@ -972,54 +1025,96 @@ if webhook_url:
                     "version": "1.4",
                     "body": [
                         {
-                            "type": "Container",
-                            "style": "emphasis",
-                            "items": [
+                            "type": "ColumnSet",
+                            "columns": [
                                 {
-                                    "type": "TextBlock",
-                                    "text": "🩺 AUTONOMOUS SELF-HEALING PR CREATED",
-                                    "weight": "Bolder",
-                                    "size": "Medium",
-                                    "color": "Good",
+                                    "type": "Column",
+                                    "width": "stretch",
+                                    "items": [
+                                        {
+                                            "type": "TextBlock",
+                                            "text": "🩺 Autonomous Self-Healer",
+                                            "weight": "Bolder",
+                                            "size": "Medium",
+                                            "color": "Good",
+                                        },
+                                        {
+                                            "type": "TextBlock",
+                                            "text": f"{repo_name} • Run #{run_number}",
+                                            "size": "Small",
+                                            "isSubtle": True,
+                                            "spacing": "None",
+                                        },
+                                    ],
                                 },
                                 {
-                                    "type": "TextBlock",
-                                    "text": "Playwright CI Failure Intercepted & Patch Prepared",
-                                    "isSubtle": True,
-                                    "spacing": "None",
+                                    "type": "Column",
+                                    "width": "auto",
+                                    "verticalContentAlignment": "Center",
+                                    "items": [
+                                        {
+                                            "type": "Container",
+                                            "style": "good",
+                                            "items": [
+                                                {
+                                                    "type": "TextBlock",
+                                                    "text": f"🟢 {confidence_score}% Confidence",
+                                                    "weight": "Bolder",
+                                                    "size": "Small",
+                                                    "color": "Good",
+                                                }
+                                            ],
+                                        }
+                                    ],
                                 },
                             ],
                         },
                         {
                             "type": "FactSet",
+                            "spacing": "Small",
                             "facts": [
-                                {"title": "Repository:", "value": repo_name},
-                                {"title": "Spec File:", "value": str(rel_spec)},
-                                {"title": "Workflow Run:", "value": f"#{run_number}"},
-                                {"title": "Diagnosis Source:", "value": source_badge},
-                                {"title": "Memory Key:", "value": redis_key},
-                                {"title": "Confidence:", "value": f"{confidence_score}%"},
-                                {"title": "Status:", "value": "🟡 Action Required: Pending Approval"},
+                                {"title": "Spec:", "value": f"{rel_spec}:{failed_line_display}"},
+                                {"title": "Source:", "value": source_badge},
+                                {"title": "Status:", "value": "🟡 PR Ready for Review"},
                             ],
                         },
                         {
-                            "type": "TextBlock",
-                            "text": f"**Diagnosis:** {root_cause}",
-                            "wrap": True,
-                        },
-                        {
                             "type": "Container",
+                            "style": "emphasis",
                             "items": [
                                 {
                                     "type": "TextBlock",
-                                    "text": "🔍 Proposed Code Diff",
+                                    "text": "📝 Proposed Locator Patch",
+                                    "size": "Small",
                                     "weight": "Bolder",
+                                    "isSubtle": True,
                                 },
                                 {
                                     "type": "TextBlock",
                                     "text": f"- {old_code_line}\n+ {new_code_line}",
                                     "fontType": "Monospace",
+                                    "size": "Small",
                                     "wrap": True,
+                                    "spacing": "Small",
+                                },
+                            ],
+                        },
+                        {
+                            "type": "Container",
+                            "id": "aiDetailsSection",
+                            "isVisible": False,
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": f"**Root Cause:** {root_cause}",
+                                    "wrap": True,
+                                    "size": "Small",
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": f"**💡 Prevention:** {prevention_tips}" if prevention_tips else "**💡 Recommendation:** Adopt Playwright user-facing locators.",
+                                    "wrap": True,
+                                    "size": "Small",
                                 },
                             ],
                         },
@@ -1027,17 +1122,23 @@ if webhook_url:
                     "actions": [
                         {
                             "type": "Action.OpenUrl",
-                            "title": "✅ Approve & Merge Fix (Open PR)",
+                            "title": "✅ Review & Merge PR",
+                            "style": "positive",
                             "url": fallback_pr_url,
                         },
                         {
+                            "type": "Action.ToggleVisibility",
+                            "title": "🔍 AI Diagnostics",
+                            "targetElements": ["aiDetailsSection"],
+                        },
+                        {
                             "type": "Action.OpenUrl",
-                            "title": "🌐 View Live HTML Report",
+                            "title": "🌐 Live Report",
                             "url": pages_url,
                         },
                         {
                             "type": "Action.OpenUrl",
-                            "title": "🔍 View CI Failure Logs",
+                            "title": "📋 CI Logs",
                             "url": run_url,
                         },
                     ],
