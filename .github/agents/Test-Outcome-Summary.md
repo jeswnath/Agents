@@ -1,6 +1,5 @@
 ---
 name: "Test-Outcome-Summary"
-model: "github-copilot"
 description: "Explains the outcome of a successful Playwright test run in concise, human-readable language."
 ---
 

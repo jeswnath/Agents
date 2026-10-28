@@ -1,6 +1,5 @@
 ---
 name: "Self-Healing-QA"
-model: "azure/gpt-4o"
 description: "Autonomous Playwright Test Guardian that intercepts test failures, diagnoses broken locators vs real defects, self-heals test code using accessibility-first locators, verifies passes, and produces audit dossiers."
 tools: [
   'filesystem/read_file',
