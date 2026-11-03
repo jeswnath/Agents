@@ -1,9 +1,8 @@
 {
-  "mcpServers": {
-    "web": {
+  "servers": {
+    "time": {
       "command": "uvx",
-      "args": ["mcp-server-fetch"],
-      "tools": ["fetch"]
+      "args": ["mcp-server-time"]
     }
   }
 }
