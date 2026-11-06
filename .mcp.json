@@ -1,12 +1,31 @@
 {
   "mcpServers": {
     "time": {
+      "type": "stdio",
       "command": "uvx",
-      "args": ["mcp-server-time"]
+      "args": ["mcp-server-time"],
+      "tools": ["get_current_time", "convert_time"]
     },
     "playwright": {
+      "type": "stdio",
       "command": "npx",
-      "args": ["@playwright/mcp@latest"]
+      "args": [
+        "--yes",
+        "@playwright/mcp@latest",
+        "--headless",
+        "--isolated"
+      ],
+      "tools": [
+        "browser_navigate",
+        "browser_navigate_back",
+        "browser_snapshot",
+        "browser_find",
+        "browser_click",
+        "browser_hover",
+        "browser_wait_for",
+        "browser_take_screenshot",
+        "browser_console_messages"
+      ]
     }
   }
 }
